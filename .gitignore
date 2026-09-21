@@ -4,3 +4,4 @@ engine/src/*.so
 engine/engine_test/cpp_engine_test
 data/
 index/
+vendor/

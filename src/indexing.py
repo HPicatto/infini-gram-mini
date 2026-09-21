@@ -88,14 +88,18 @@ def prepare_fewfiles(args):
             gc.collect()
     gc.collect()
 
-    # append one zero byte to the end of the file, pad to 8 bytes, and overwrite the header
-    ds_fout.write(b'\xfa')
+    # append the terminator and the alphabet sentinel, pad to 8 bytes, and
+    # overwrite the header. The trailing \x00 must be inside the indexed text:
+    # sdsl's CSA reserves comp 0 for its sentinel, so without a 0x00 byte the
+    # lowest byte value actually occurring in the corpus takes that slot and
+    # becomes unsearchable (silently -- every other byte still counts right).
+    ds_fout.write(b'\xfa\x00')
     ds_size = ds_fout.tell() - 8
     if ds_size % 8 != 0:
         ds_fout.write(b'\00' * (8 - ds_size % 8))
     ds_fout.seek(0)
     ds_fout.write(np.array([ds_size * 8], dtype=np.uint64).view(np.uint8).tobytes())
-    mt_fout.write(b'\xfa')
+    mt_fout.write(b'\xfa\x00')
     mt_size = mt_fout.tell() - 8
     if mt_size % 8 != 0:
         mt_fout.write(b'\00' * (8 - mt_size % 8))
@@ -184,24 +188,30 @@ def prepare_manyfiles(args):
             offset_prev_bytes += os.path.getsize(f'{args.temp_dir}/files/data_offset.{filenum:04d}')
 
         with open(ds_path, 'wb') as f:
-            data_file_size = 8 + data_prev_bytes + (8 - data_prev_bytes % 8) # \xfa + padding
+            # \xfa terminator + \x00 alphabet sentinel, then padding to 8 bytes.
+            # See the comment in prepare_fewfiles for why the \x00 is required.
+            data_text_len = data_prev_bytes + 2
+            data_pad = (8 - data_text_len % 8) % 8
+            data_file_size = 8 + data_text_len + data_pad
             f.truncate(data_file_size)
             f.seek(0)
-            f.write(np.array([(data_prev_bytes + 1) * 8], dtype=np.uint64).view(np.uint8).tobytes())
+            f.write(np.array([data_text_len * 8], dtype=np.uint64).view(np.uint8).tobytes())
             f.seek(8 + data_prev_bytes)
-            f.write(b'\xfa')
-            f.write(b'\00' * (8 - data_prev_bytes % 8 - 1))
+            f.write(b'\xfa\x00')
+            f.write(b'\00' * data_pad)
         with open(od_path, 'wb') as f:
             data_offset_file_size = offset_prev_bytes
             f.truncate(data_offset_file_size)
         with open(mt_path, 'wb') as f:
-            meta_file_size = 8 + meta_prev_bytes + (8 - meta_prev_bytes % 8) # \xfa + padding
+            meta_text_len = meta_prev_bytes + 2  # \xfa terminator + \x00 sentinel
+            meta_pad = (8 - meta_text_len % 8) % 8
+            meta_file_size = 8 + meta_text_len + meta_pad
             f.truncate(meta_file_size)
             f.seek(0)
-            f.write(np.array([(meta_prev_bytes + 1) * 8], dtype=np.uint64).view(np.uint8).tobytes())
+            f.write(np.array([meta_text_len * 8], dtype=np.uint64).view(np.uint8).tobytes())
             f.seek(8 + meta_prev_bytes)
-            f.write(b'\xfa')
-            f.write(b'\00' * (8 - meta_prev_bytes % 8 - 1))
+            f.write(b'\xfa\x00')
+            f.write(b'\00' * meta_pad)
         with open(om_path, 'wb') as f:
             meta_offset_file_size = offset_prev_bytes
             f.truncate(meta_offset_file_size)
@@ -251,6 +261,17 @@ def build_sa_bwt(args, mode):
     # print(f'Using {num_job_batches} batches of {parallel_jobs} jobs each, for a total of {total_jobs} jobs.', flush=True)
 
     S = ds_size // total_jobs
+    if S == 0:
+        raise SystemExit(
+            f'Corpus is too small to split into {total_jobs} jobs '
+            f'({ds_size} bytes of text). Re-run with fewer --cpus.'
+        )
+    # rust_indexing merge subtracts the overlap from each part, so an overlap
+    # larger than the smallest part underflows and panics with
+    # "range end index ... out of range for slice of length ...". Parts are at
+    # least S bytes, so cap the overlap there. Unchanged (HACK) for any corpus
+    # big enough to matter; make-part and merge must agree on the value.
+    hack = min(HACK, S)
 
     parts_dir = os.path.join(args.temp_dir, f'parts')
     shutil.rmtree(parts_dir, ignore_errors=True)
@@ -260,7 +281,7 @@ def build_sa_bwt(args, mode):
         batch_end = min(batch_start+parallel_jobs, total_jobs)
         batch_ranges = []
         for i in range(batch_start, batch_end):
-            s, e = DS_OFFSET + i*S, DS_OFFSET + min((i+1)*S+HACK, ds_size)
+            s, e = DS_OFFSET + i*S, DS_OFFSET + min((i+1)*S+hack, ds_size)
             batch_ranges.append((s, e))
         pipes = []
         for (s, e) in batch_ranges:
@@ -285,7 +306,7 @@ def build_sa_bwt(args, mode):
     shutil.rmtree(bwt_dir, ignore_errors=True)
     os.makedirs(bwt_dir)
 
-    pipe = os.popen(f'./rust_indexing merge --data-file {ds_path} --parts-dir {parts_dir} --merged-dir {merged_dir} --bwt-dir {bwt_dir} --num-threads {args.cpus} --hacksize {HACK} --ratio {ratio}')
+    pipe = os.popen(f'./rust_indexing merge --data-file {ds_path} --parts-dir {parts_dir} --merged-dir {merged_dir} --bwt-dir {bwt_dir} --num-threads {args.cpus} --hacksize {hack} --ratio {ratio}')
     pipe.read()
     if pipe.close() is not None:
         print('\tStep 2.2 (merge): Something went wrong', flush=True)

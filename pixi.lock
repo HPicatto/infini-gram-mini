@@ -10,6 +10,7 @@ environments:
   default:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
+    - url: https://prefix.dev/pixi-build-backends/
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -66,6 +67,7 @@ environments:
   opencilk:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
+    - url: https://prefix.dev/pixi-build-backends/
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda

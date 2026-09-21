@@ -1,16 +1,45 @@
 # Development environment for infini-gram mini.
 #
-# Everything C++ here is built from source -- see build.sh. Upstream's
-# psi4::gcc-5 / libcilkrts instructions are obsolete and documented as such in
-# the README.
+# Everything C++ is built from source by build.sh -- there are no prebuilt
+# libraries and no Cilk Plus runtime. Upstream's psi4::gcc-5 instructions are
+# obsolete; see the README.
 #
-# linux-64 only: src/rust_indexing is a prebuilt amd64 binary and upstream
-# ships no Rust source for it. Everything else is portable.
+# linux-64 only: src/rust_indexing is a prebuilt amd64 binary and upstream ships
+# no Rust source for it. Everything else is portable.
 
 [workspace]
 name = "infini-gram-mini"
-channels = ["conda-forge"]
+channels = ["conda-forge", "https://prefix.dev/pixi-build-backends"]
 platforms = ["linux-64"]
+preview = ["pixi-build"]
+
+# Built from source as a conda package, so consumers can depend on this repo
+# directly -- `pixi add --git https://github.com/HPicatto/infini-gram-mini.git
+# infini-gram-mini` -- instead of cloning it and running a build script.
+[package]
+name = "infini-gram-mini"
+version = "0.1.0"
+
+[package.build.backend]
+name = "pixi-build-cmake"
+version = "0.4.*"
+
+[package.build.config]
+extra-args = ["-DIGM_BACKEND=openmp", "-DCMAKE_BUILD_TYPE=Release"]
+
+[package.build-dependencies]
+# Needed to rewrite the rpath of the prebuilt src/rust_indexing during packaging.
+patchelf = ">=0.17"
+
+[package.host-dependencies]
+python = ">=3.12,<3.13"
+pybind11 = ">=2.12"
+
+[package.run-dependencies]
+python = ">=3.12,<3.13"
+numpy = ">=2.0"
+tqdm = ">=4.66"
+zstandard = ">=0.22"
 
 [dependencies]
 python = ">=3.12,<3.13"
@@ -19,15 +48,25 @@ tqdm = ">=4.66"
 zstandard = ">=0.22"
 pybind11 = ">=2.12"
 cxx-compiler = ">=1.7"
-c-compiler = ">=1.7"
+c-compiler = ">=1.7"     # libdivsufsort is C
+
+# ---------------------------------------------------------------- tasks -----
 
 [tasks.build]
-cmd = "./build.sh openmp"
-description = "Build with the OpenMP backend (default; needs no special toolchain)"
-
-[tasks.build-serial]
-cmd = "./build.sh serial"
-description = "Build without parallelism, against the non-parallel sdsl (reference)"
+args = [{ arg = "backend", default = "openmp" }]
+cmd = "cmake -B build/{{ backend }} -DIGM_BACKEND={{ backend }} -DCMAKE_BUILD_TYPE=Release && cmake --build build/{{ backend }} -j"
+description = "Build the indexer and engine (backend: openmp | serial)"
+inputs = [
+  "CMakeLists.txt",
+  "src/indexing.cpp",
+  "engine/src/cpp_engine.*",
+  "sdsl/include/**",
+  "sdsl/lib/**",
+  "parallel_sdsl/include/**",
+  "parallel_sdsl/lib/**",
+  "external/libdivsufsort/**",
+]
+outputs = ["src/cpp_indexing", "engine/src/cpp_engine*.so"]
 
 [tasks.index]
 cmd = "python indexing.py"
@@ -35,50 +74,43 @@ cwd = "src"
 description = "Index a corpus: pixi run index --data_dir <abs> --save_dir <abs> --mem <GiB>"
 
 [tasks.bench]
-cmd = "python bench_backends.py"
-description = "Time the built backends against each other on a generated corpus"
+cmd = "python bench.py"
+depends-on = ["build"]
+description = "Time FM-index construction over progressively larger corpus slices"
 
-# OpenCilk is not published to any conda channel, so out of the box it cannot be
-# a dependency. recipe/opencilk/ repackages the official release so that it can
-# be: build it with rattler-build, push it to a channel you control, and then
-# add `opencilk` to [feature.opencilk.dependencies] below -- resolved and
-# pinned in pixi.lock like any other package. Until that is published, the
-# fetch task below downloads it directly, verifying the digest.
+[tasks.test]
+cmd = "python selftest.py"
+depends-on = ["build"]
+description = "Regression test for the indexing bugs fixed in this fork"
+
+# ------------------------------------------------------------- opencilk -----
+# OpenCilk is not published to any conda channel, so it cannot be a dependency.
+# recipe/opencilk/ repackages the official release as a conda package; once that
+# is pushed to a channel this whole feature collapses into:
 #
-# The OpenMP backend is the default precisely so none of this is on the common
-# path.
-[feature.opencilk.tasks.fetch-opencilk]
-cmd = """
-test -x build/opencilk-toolchain/bin/clang++ || (
-  mkdir -p build &&
-  curl -fsSL -o build/opencilk.tar.gz https://github.com/OpenCilk/opencilk-project/releases/download/opencilk%2Fv3.0/opencilk-3.0.0-x86_64-linux-gnu-ubuntu-24.04.tar.gz &&
-  echo "38e16208a0d086f72858c2024474a0a69c519830d3d3268a80e1ef50d6116838  build/opencilk.tar.gz" | sha256sum -c - &&
-  mkdir -p build/opencilk-toolchain &&
-  tar -xzf build/opencilk.tar.gz -C build/opencilk-toolchain --strip-components=1 &&
-  rm -f build/opencilk.tar.gz
-)
-"""
-description = "Download the OpenCilk 3.0 toolchain (~1.4 GB) into build/"
-
-[feature.opencilk.tasks.build-opencilk]
-cmd = "./build.sh opencilk"
-depends-on = ["fetch-opencilk"]
-description = "Build with OpenCilk (cilk_spawn/cilk_for unchanged, work-stealing scheduler)"
-
-[feature.opencilk.dependencies]
-rattler-build = ">=0.76"
-
-[feature.opencilk.tasks.package-opencilk]
-cmd = "rattler-build build --recipe recipe/opencilk/recipe.yaml --output-dir build/channel"
-description = "Build the OpenCilk conda package so it can be hosted on a channel"
-
-# Once published, replace fetch-opencilk with a plain dependency:
 #   [feature.opencilk]
 #   channels = ["conda-forge", "https://prefix.dev/<your-channel>"]
 #   [feature.opencilk.dependencies]
 #   opencilk = "3.0.*"
-# build.sh already honours OPENCILK_CXX, which the package exports on activation.
+#
+# build.sh already honours the OPENCILK_CXX that the package exports.
+
+[feature.opencilk.dependencies]
+rattler-build = ">=0.76"
+
+[feature.opencilk.tasks.fetch-opencilk]
+cmd = "bash scripts/fetch_opencilk.sh"
+description = "Download the digest-pinned OpenCilk toolchain (~1.4 GB) into build/"
+outputs = ["build/opencilk-toolchain/bin/clang++"]
+
+[feature.opencilk.tasks.build-opencilk]
+cmd = "cmake -B build/opencilk -DIGM_BACKEND=opencilk -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=$PWD/build/opencilk-toolchain/bin/clang++ && cmake --build build/opencilk -j"
+depends-on = ["fetch-opencilk"]
+description = "Build with OpenCilk (cilk_spawn/cilk_for unchanged, work-stealing)"
+
+[feature.opencilk.tasks.package-opencilk]
+cmd = "rattler-build build --recipe recipe/opencilk/recipe.yaml --output-dir build/channel"
+description = "Build the OpenCilk conda package for hosting on a channel"
 
 [environments]
-default = { solve-group = "default" }
-opencilk = { features = ["opencilk"], solve-group = "default" }
+opencilk = ["opencilk"]

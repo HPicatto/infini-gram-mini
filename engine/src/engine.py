@@ -1,7 +1,7 @@
 import sys
 from typing import Iterable, List, Optional, cast
 
-from src.models import EngineResponse, FindResponse, CountResponse, DocResponse
+from .models import EngineResponse, FindResponse, CountResponse, DocResponse
 from .cpp_engine import Engine
 
 class InfiniGramMiniEngine:
@@ -10,6 +10,20 @@ class InfiniGramMiniEngine:
 
         assert sys.byteorder == 'little', 'This code is designed to run on little-endian machines only!'
         assert type(index_dirs) == list and all(type(d) == str for d in index_dirs)
+
+        # A failed or interrupted indexing run leaves a directory with the
+        # intermediate .sdsl files but no .fm9, and the C++ engine loads that
+        # without complaint and then answers 0 to every query. Check here so a
+        # broken index is an error rather than a silently empty corpus.
+        import os
+        for index_dir in index_dirs:
+            required = ['data.fm9'] + (['meta.fm9'] if get_metadata else [])
+            missing = [f for f in required if not os.path.exists(os.path.join(index_dir, f))]
+            if missing:
+                raise FileNotFoundError(
+                    f'{index_dir} is not a complete index: missing {", ".join(missing)}. '
+                    f'Did the indexing run fail?'
+                )
 
         self.engine = Engine(index_dirs, load_to_ram, get_metadata)
 

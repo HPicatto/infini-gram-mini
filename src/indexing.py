@@ -257,6 +257,19 @@ def build_sa_bwt(args, mode):
     while num_job_batches * (mem_bytes // 12) < ds_size:
         num_job_batches *= 2
     parallel_jobs = args.cpus
+    # Very small parts break rust_indexing: merge underflows its overlap
+    # subtraction, and concat panics separately (main.rs:534) once parts get
+    # down to ~10 KB. Keep every part at least MIN_PART_BYTES by using fewer
+    # jobs, which only ever binds on corpora far too small to need the
+    # parallelism anyway.
+    MIN_PART_BYTES = 1 << 20
+    max_useful_jobs = max(1, ds_size // MIN_PART_BYTES)
+    if num_job_batches * parallel_jobs > max_useful_jobs:
+        parallel_jobs = max(1, max_useful_jobs // num_job_batches)
+        if parallel_jobs < args.cpus:
+            print(f'\tStep 2.1 (make-part): using {parallel_jobs} of {args.cpus} '
+                  f'cpus; {ds_size} bytes of text is too small to split further.',
+                  flush=True)
     total_jobs = num_job_batches * parallel_jobs
     # print(f'Using {num_job_batches} batches of {parallel_jobs} jobs each, for a total of {total_jobs} jobs.', flush=True)
 

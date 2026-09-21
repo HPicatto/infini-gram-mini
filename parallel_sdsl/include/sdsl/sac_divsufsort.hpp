@@ -189,6 +189,9 @@ void initBuckets(const sauchar_t *T, saidx_t *SA,
 			}	
 		}
 	}}
+	// Stands in for Cilk's implicit sync on return: calculateBucketOffsets
+	// was spawned above and writes bucket_A/bucket_B, which callers read.
+	cilk_sync;
 }
 
 

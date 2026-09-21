@@ -55,6 +55,7 @@
 #include "csa_alphabet_strategy.hpp" // for key_trait
 #include "inv_perm_support.hpp"
 #include "wavelet_trees.hpp"
+#include <type_traits>
 #include <set>
 #include <tuple>
 #include <vector>
@@ -62,6 +63,7 @@
 
 namespace sdsl
 {
+
 
 template<class t_csa, uint8_t t_width=0>
 class _sa_order_sampling : public int_vector<t_width>
@@ -339,7 +341,13 @@ class _fuzzy_sa_sampling
                 std::string tmp_key = "fuzzy_isa_samples_"+util::to_string(util::pid())+"_"+util::to_string(util::id());
                 std::string tmp_file_name = cache_file_name(tmp_key, cconfig);
                 store_to_file(inv_perm, tmp_file_name);
-                construct(m_inv_perm, tmp_file_name, 0);
+                // construct() lives in construct.hpp, which includes this header, so
+                // it is not declared at this point. GCC 15 enforces two-phase
+                // lookup and rejects the call. Giving one argument a dependent
+                // type defers lookup to instantiation, where ADL finds
+                // sdsl::construct via m_inv_perm. Resolves to std::string.
+                using dependent_string = typename std::enable_if<sizeof(t_csa) != 0, std::string>::type;
+                construct(m_inv_perm, dependent_string(tmp_file_name), 0);
                 sdsl::remove(tmp_file_name);
             }
         }

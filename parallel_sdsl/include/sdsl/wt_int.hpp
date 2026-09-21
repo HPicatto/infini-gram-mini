@@ -241,6 +241,10 @@ class wt_int
 			else 
 				sigma++;
 		}
+		// Stands in for Cilk's implicit sync on return. NB: the concurrent
+		// sigma++ below is an upstream race, present under Cilk too; left as
+		// is. wt_int is not on the csa_wt<wt_huff<...>> path this repo builds.
+		cilk_sync;
 	}
 
     public:

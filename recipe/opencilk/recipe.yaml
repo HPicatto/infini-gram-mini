@@ -1,0 +1,78 @@
+# Conda package for the OpenCilk toolchain.
+#
+# OpenCilk is not published to any conda channel, which is the only reason
+# build.sh's opencilk backend cannot simply be a pixi dependency. This recipe
+# repackages the official release so it can be: build it with rattler-build,
+# push it to a channel you control, and then `opencilk` is an ordinary
+# dependency -- resolved, hash-verified and pinned in pixi.lock like anything
+# else, instead of an unverified curl in a task.
+#
+#   pixi run -e opencilk package-opencilk     # builds into ./build/channel
+#   rattler-build upload prefix -c <channel> build/channel/linux-64/*.conda
+#
+# Installs under $PREFIX/opt/opencilk rather than $PREFIX/bin so it cannot
+# collide with conda-forge's clang, and exports OPENCILK_CXX on activation,
+# which build.sh reads.
+
+schema_version: 1
+
+context:
+  version: "3.0.0"
+  release: "opencilk/v3.0"
+
+package:
+  name: opencilk
+  version: ${{ version }}
+
+source:
+  url: https://github.com/OpenCilk/opencilk-project/releases/download/${{ release }}/opencilk-${{ version }}-x86_64-linux-gnu-ubuntu-24.04.tar.gz
+  sha256: 38e16208a0d086f72858c2024474a0a69c519830d3d3268a80e1ef50d6116838
+
+build:
+  number: 0
+  # Upstream ships only x86_64 linux and arm64 macOS builds.
+  skip: not (linux and x86_64)
+  script:
+    - mkdir -p "${PREFIX}/opt/opencilk"
+    - |
+      # Keep the compiler driver, its resource directory and the Cilk runtime.
+      # Drop the static LLVM archives, tests and the auxiliary tools, which are
+      # the bulk of the tarball and are not needed to compile cilk_spawn.
+      cp -a bin "${PREFIX}/opt/opencilk/" 2>/dev/null || true
+      cp -a include "${PREFIX}/opt/opencilk/" 2>/dev/null || true
+      mkdir -p "${PREFIX}/opt/opencilk/lib"
+      cp -a lib/clang "${PREFIX}/opt/opencilk/lib/" 2>/dev/null || true
+      find lib -maxdepth 1 -name '*.so*' -exec cp -a {} "${PREFIX}/opt/opencilk/lib/" \; 2>/dev/null || true
+      find lib -maxdepth 1 -name 'libopencilk*' -exec cp -a {} "${PREFIX}/opt/opencilk/lib/" \; 2>/dev/null || true
+      find "${PREFIX}/opt/opencilk" -name '*.a' -delete
+    - |
+      mkdir -p "${PREFIX}/etc/conda/activate.d"
+      cat > "${PREFIX}/etc/conda/activate.d/opencilk.sh" <<'EOF'
+      export OPENCILK_ROOT="${CONDA_PREFIX}/opt/opencilk"
+      export OPENCILK_CXX="${OPENCILK_ROOT}/bin/clang++"
+      export OPENCILK_CC="${OPENCILK_ROOT}/bin/clang"
+      EOF
+
+tests:
+  - script:
+      - test -x "${PREFIX}/opt/opencilk/bin/clang++"
+      - "${PREFIX}/opt/opencilk/bin/clang++" --version
+      # The point of the package: -fopencilk must actually work.
+      - |
+        cat > t.c <<'EOF'
+        #include <cilk/cilk.h>
+        #include <stdio.h>
+        int fib(int n){ if(n<2) return n; int a,b;
+          a = cilk_spawn fib(n-1); b = fib(n-2); cilk_sync; return a+b; }
+        int main(void){ printf("%d\n", fib(20)); return 0; }
+        EOF
+      - "${PREFIX}/opt/opencilk/bin/clang" -fopencilk t.c -o t && ./t
+
+about:
+  homepage: https://opencilk.org
+  license: Apache-2.0 WITH LLVM-exception
+  license_file: LICENSE.TXT
+  summary: OpenCilk compiler and runtime for task-parallel C/C++ (cilk_spawn, cilk_for)
+  description: |
+    Repackaged from the official OpenCilk release binaries. OpenCilk is the
+    maintained successor to Intel Cilk Plus, which GCC removed in 8.x.

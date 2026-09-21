@@ -97,36 +97,47 @@ from engine.src import InfiniGramMiniEngine
 
 ### 1. Prerequisites
 
-Run the setup script. It vendors the one library the prebuilt indexer needs and
-builds the query engine:
+Build from source:
 
 ```command
-./setup_env.sh
-export LD_LIBRARY_PATH="$PWD/vendor/lib:$LD_LIBRARY_PATH"
+pixi run build          # or: ./build.sh openmp
 ```
 
-You need Python with `numpy`, `tqdm` and `zstandard`, plus `pybind11` and any
-C++17 compiler for the engine. No old GCC required.
+That compiles libdivsufsort, sdsl, `cpp_indexing` and the query engine with any
+C++17 compiler. No old GCC, no Cilk runtime, nothing prebuilt.
+
+Backends, selected by `parallel_sdsl/include/sdsl/parallel.hpp`:
+
+| build | parallelism | needs |
+| --- | --- | --- |
+| `pixi run build` | OpenMP tasks + taskloop | any C++17 compiler (default) |
+| `pixi run build-opencilk` | `cilk_spawn` / `cilk_for` | [OpenCilk](https://opencilk.org) toolchain, fetched by the task |
+| `pixi run build-serial` | none | any C++17 compiler (reference) |
+
+All three produce byte-identical indexes.
 
 <details>
 <summary>Why the old <code>psi4::gcc-5=5.2.0</code> instructions are gone</summary>
 
-The prebuilt `src/cpp_indexing` is linked against the Cilk Plus runtime:
+Upstream shipped `src/cpp_indexing` as a 2019 amd64 binary built with gcc-5 and
+Intel Cilk Plus, so running it needed `libcilkrts.so.5`:
 
 ```command
 $ objdump -p src/cpp_indexing | grep NEEDED
   libstdc++.so.6   libm.so.6   libcilkrts.so.5   libgcc_s.so.1   libc.so.6
 ```
 
-Installing gcc-5 was only ever a way to obtain `libcilkrts.so.5`. That recipe no
-longer works — conda-forge dropped `isl 0.12.2` — and it was never necessary.
-Cilk Plus was removed from GCC in 8.x and no conda channel packages the runtime,
-so `setup_env.sh` vendors Debian buster's last build (`gcc-7 7.4.0-6`, verified
-by sha256) into `vendor/lib`.
+Installing gcc-5 was only ever a way to obtain that library. The recipe no
+longer works anyway — conda-forge dropped `isl 0.12.2` — and it was never
+necessary: `indexing.cpp`'s own header comment documents a non-Cilk build, and
+Cilk Plus itself was removed from GCC in 8.x.
 
-Nothing else in the toolchain is old: `cpp_indexing` requires only GLIBCXX
-≤ 3.4.21 and GLIBC ≤ 2.34, `rust_indexing` needs nothing beyond libc, and the
-query engine compiles cleanly under GCC 15 against the prebuilt `libsdsl.a`.
+This fork builds everything from source instead. The result is byte-identical
+to the binary upstream shipped (`data.fm9` and `meta.fm9` match by sha256), and
+depends only on libstdc++/libm/libgcc_s/libc, plus libgomp for the OpenMP build.
+
+`src/rust_indexing` remains a prebuilt binary: upstream ships no Rust source for
+it. It needs nothing beyond libc.
 </details>
 
 ### 2. Run the indexing script
@@ -137,7 +148,31 @@ We have scripts for the full workflow of downloading datasets and indexing them,
 
 ## Changes in this fork
 
-**Indexing no longer needs gcc-5.** See the prerequisites above.
+**Everything C++ builds from source with a current toolchain.** Upstream's
+prebuilt gcc-5/Cilk `cpp_indexing` and its 2019 static libraries are gone, along
+with the `libcilkrts.so.5` requirement. Getting there needed four fixes that
+modern compilers surface but older ones did not:
+
+* `louds_tree.hpp` referenced `tree.m_select1/0` where the members are
+  `m_bv_select1/0` — never diagnosed while the template went uninstantiated.
+* `csa_sampling_strategy.hpp` called `construct()` before any declaration was
+  visible; GCC 15 enforces two-phase lookup. `construct.hpp` includes that
+  header, so the call is routed through a dependent type and resolved at
+  instantiation instead.
+* The prebuilt `libdivsufsort.a` was non-PIE, which modern toolchains reject
+  when linking a PIE executable. The source is now vendored under `external/`
+  and compiled with `-fPIC`; only the `.a` files were in this repo before.
+* `parallel.hpp`'s OpenMP branch defined `cilk_spawn`/`cilk_sync` as **empty**,
+  silently serialising every recursive spawn. It now maps them onto OpenMP
+  tasks, and adds an OpenCilk branch. Two Cilk behaviours needed care: Cilk
+  syncs implicitly when a function returns (five spawn sites relied on it, so
+  explicit syncs were added — no-ops under Cilk/OpenCilk), and OpenMP tasks only
+  go parallel inside a region, so loops became `taskloop` and recursive entry
+  points are wrapped in `spawn_region()`.
+
+Measured on a 120 MB corpus, full pipeline, mean of 3: **17.2 s serial vs 11.7 s
+OpenMP** (16 threads), with identical output. The call sites in the 24 Cilk
+locations are unchanged; all of it lives in `parallel.hpp`.
 
 **Fixed: the lowest byte value in a corpus was silently unsearchable.**
 `prepare` wrote the indexed text as `[0xff doc][0xff doc]…[0xfa]`, which never

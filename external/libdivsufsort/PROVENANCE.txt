@@ -1,0 +1,6 @@
+5f60d6f026c30fb4ac296f696b3c8b0eb71bd428
+libdivsufsort 2.0.1, vendored from https://github.com/y-256/libdivsufsort
+(commit above, 2015-10-28, MIT licence). Upstream is CMake-only; the headers
+here are the generated ones (config.h, divsufsort.h, divsufsort64.h, lfs.h)
+so the sources build with a plain compiler loop and no CMake dependency.
+Only the 2019 prebuilt .a files lived in this repo before; the sources did not.

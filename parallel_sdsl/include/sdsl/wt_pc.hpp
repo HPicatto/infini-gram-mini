@@ -136,9 +136,15 @@ class wt_pc
         }
 
         void construct_init_rank_select() {
-            cilk_spawn util::init_support(m_bv_rank, &m_bv);
-            cilk_spawn util::init_support(m_bv_select0, &m_bv);
-            util::init_support(m_bv_select1, &m_bv);
+            // spawn_region so the spawns have a team under OpenMP; the trailing
+            // sync replaces Cilk's implicit sync at function return, without
+            // which the supports may still be building when this returns.
+            spawn_region([&] {
+                cilk_spawn util::init_support(m_bv_rank, &m_bv);
+                cilk_spawn util::init_support(m_bv_select0, &m_bv);
+                util::init_support(m_bv_select1, &m_bv);
+                cilk_sync;
+            });
         }
 
         // recursive internal version of the method interval_symbols
@@ -249,6 +255,9 @@ class wt_pc
 			if (length - right_start) {
 				build_recursive(start + right_start, length - right_start, destination, source, tree_data, bv_node_pos, m_tree.child(v,1), l+1);
 			}
+			// Stands in for Cilk's implicit sync on return: the spawned left
+			// child writes into tree_data, which the caller reads.
+			cilk_sync;
 		}
 	}
 
@@ -303,7 +312,7 @@ class wt_pc
                 return;
             }
 	    // start, len, source, destination, huff_tree_structure, output_wt
-	    this->build_recursive(0, m_size, s1, s2, (uint64_t*)temp_bv.data(), bv_node_pos, m_tree.root());
+	    spawn_region([&] { this->build_recursive(0, m_size, s1, s2, (uint64_t*)temp_bv.data(), bv_node_pos, m_tree.root()); });
             m_bv = bit_vector_type(std::move(temp_bv));
             // 5. Initialize rank and select data structures for m_bv
             this->construct_init_rank_select();
@@ -342,7 +351,7 @@ class wt_pc
                 bv_node_pos[v] = m_tree.bv_pos(v);
             }
             // start, len, source, destination, huff_tree_structure, output_wt
-            this->build_recursive(0, m_size, s1, s2, (uint64_t*)temp_bv.data(), bv_node_pos, m_tree.root());
+            spawn_region([&] { this->build_recursive(0, m_size, s1, s2, (uint64_t*)temp_bv.data(), bv_node_pos, m_tree.root()); });
             m_bv = bit_vector_type(std::move(temp_bv));
             // 5. Initialize rank and select data structures for m_bv
             this->construct_init_rank_select();

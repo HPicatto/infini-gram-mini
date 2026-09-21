@@ -4,4 +4,9 @@ engine/src/*.so
 engine/engine_test/cpp_engine_test
 data/
 index/
-vendor/
+
+# Build artifacts. cpp_indexing used to be committed as a prebuilt gcc-5/Cilk
+# binary; it is now built from source by build.sh, which is why it is ignored
+# rather than tracked. rust_indexing stays tracked: upstream ships no source.
+build/
+src/cpp_indexing

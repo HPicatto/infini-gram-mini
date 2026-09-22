@@ -8,11 +8,19 @@
 
 set -euo pipefail
 
-VERSION="3.0.0"
-URL="https://github.com/OpenCilk/opencilk-project/releases/download/opencilk%2Fv3.0/opencilk-${VERSION}-x86_64-linux-gnu-ubuntu-24.04.tar.gz"
-SHA256="38e16208a0d086f72858c2024474a0a69c519830d3d3268a80e1ef50d6116838"
-
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+recipe="${root}/recipe/opencilk/recipe.yaml"
+
+# The version and digest live in the recipe only, so a bump cannot be applied
+# to one of the two and silently missed by the other.
+VERSION="$(sed -n 's/^  version: "\(.*\)"$/\1/p' "${recipe}")"
+RELEASE="$(sed -n 's/^  release: "\(.*\)"$/\1/p' "${recipe}")"
+SHA256="$(sed -n 's/^  sha256: \(.*\)$/\1/p' "${recipe}")"
+if [[ -z "${VERSION}" || -z "${RELEASE}" || -z "${SHA256}" ]]; then
+    echo "ERROR: could not read version/release/sha256 from ${recipe}" >&2
+    exit 1
+fi
+URL="https://github.com/OpenCilk/opencilk-project/releases/download/${RELEASE//\//%2F}/opencilk-${VERSION}-x86_64-linux-gnu-ubuntu-24.04.tar.gz"
 dest="${root}/build/opencilk-toolchain"
 
 if [[ -x "${dest}/bin/clang++" ]]; then

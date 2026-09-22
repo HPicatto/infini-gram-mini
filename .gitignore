@@ -10,3 +10,6 @@ index/
 # rather than tracked. rust_indexing stays tracked: upstream ships no source.
 build/
 src/cpp_indexing
+
+# `pixi build` drops the built package in the repo root.
+*.conda

@@ -115,8 +115,12 @@ The recipe no longer works anyway -- conda-forge dropped `isl 0.12.2` -- and it 
 This fork builds everything from source instead.
 The result is byte-identical to the binary upstream shipped, and depends only on libstdc++/libm/libgcc_s/libc, plus libgomp for the OpenMP build.
 
-`src/rust_indexing` remains a prebuilt binary: upstream ships no Rust source for it.
-It needs nothing beyond libc.
+`src/rust_indexing` is still used as a prebuilt binary and is the one artifact
+not built here -- but its source *is* in this repo, under `suffix_array/` (a
+Cargo crate, `rust_indexing` 1.0.0). Building it would remove the last prebuilt
+artifact and lift the linux-64 restriction. Note `overflow-checks = false` in
+its `Cargo.toml`: that is why an underflow in the merge step surfaces as
+`range end index 18446744073709491749` rather than a clean panic.
 </details>
 
 ## Indexing new datasets
@@ -177,7 +181,7 @@ Getting there needed six fixes that modern compilers surface but older ones did 
 The source is now vendored under `external/` and compiled with `-fPIC`; only the `.a` files were in this repo before.
 * `wt_hutu.hpp` compared `h1->left->rank < h1->right->rank`, which Clang parses as the start of a template argument list; parenthesised.
 Only surfaced once a second compiler was in play.
-* `build.sh` originally built only the 32-bit libdivsufsort, while sdsl's `construct_sa` references `divsufsort64`.
+* The build originally produced only the 32-bit libdivsufsort, while sdsl's `construct_sa` references `divsufsort64`.
 GCC optimised the reference away so the GCC builds linked by luck; Clang did not.
 Both variants are built now.
 * `parallel.hpp`'s OpenMP branch defined `cilk_spawn`/`cilk_sync` as **empty**, silently serialising every recursive spawn.

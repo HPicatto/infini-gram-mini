@@ -1,11 +1,12 @@
 # Development environment for infini-gram mini.
 #
-# Everything C++ is built from source by build.sh -- there are no prebuilt
+# Everything C++ is built from source by CMakeLists.txt -- there are no prebuilt
 # libraries and no Cilk Plus runtime. Upstream's psi4::gcc-5 instructions are
 # obsolete; see the README.
 #
-# linux-64 only: src/rust_indexing is a prebuilt amd64 binary and upstream ships
-# no Rust source for it. Everything else is portable.
+# linux-64 only, because src/rust_indexing is still used as a prebuilt amd64
+# binary. Its source is in the repo under suffix_array/ (a Cargo crate), so this
+# restriction is removable -- it just has not been built here yet.
 
 [workspace]
 name = "infini-gram-mini"
@@ -93,7 +94,7 @@ description = "Regression test for the indexing bugs fixed in this fork"
 #   [feature.opencilk.dependencies]
 #   opencilk = "3.0.*"
 #
-# build.sh already honours the OPENCILK_CXX that the package exports.
+# The build-opencilk task already honours the OPENCILK_CXX that package exports.
 
 [feature.opencilk.dependencies]
 rattler-build = ">=0.76"
@@ -104,7 +105,7 @@ description = "Download the digest-pinned OpenCilk toolchain (~1.4 GB) into buil
 outputs = ["build/opencilk-toolchain/bin/clang++"]
 
 [feature.opencilk.tasks.build-opencilk]
-cmd = "cmake -B build/opencilk -DIGM_BACKEND=opencilk -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=$PWD/build/opencilk-toolchain/bin/clang++ && cmake --build build/opencilk -j"
+cmd = "cmake -B build/opencilk -DIGM_BACKEND=opencilk -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${OPENCILK_CXX:-$PWD/build/opencilk-toolchain/bin/clang++} && cmake --build build/opencilk -j"
 depends-on = ["fetch-opencilk"]
 description = "Build with OpenCilk (cilk_spawn/cilk_for unchanged, work-stealing)"
 
